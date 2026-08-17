@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+**/.DS_Store
+**/*:Zone.Identifier
+
+# Python
+__pycache__/
+*.py[cod]
+
+# VS Code
+.vscode/
+
+# Large research datasets
+fits and csv files/
+
+# Generated outputs
+outputs/
+# plots/ is handled below
+
+# Keep plots folder, but ignore its contents
+plots/*
+!plots/.gitkeep
+
+# Keep the plots folder, but ignore everything inside it
+plots/*
+!plots/.gitkeep
