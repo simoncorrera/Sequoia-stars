@@ -1,3 +1,38 @@
+import random
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.colors import LogNorm
+import time as tm
+from time import time
+import fitsio
+import pandas as pd
+from galpy.potential import MWPotential2014, vcirc, evaluateRforces
+from galpy.orbit import Orbit
+from scipy.stats import gaussian_kde, ks_2samp, kstest
+from hyppo.ksample import Energy, KSample
+from hyppo.independence import Hsic
+import corner
+from scipy.stats import norm
+from sklearn.mixture import GaussianMixture
+
+from astroquery.gaia import Gaia
+from astropy.table import Table
+from astropy.table import Table, vstack
+from glob import glob
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import balanced_accuracy_score
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KernelDensity
+import os
+from datetime import datetime
+from matplotlib.ticker import AutoLocator
+from pathlib import Path
+from functools import reduce
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -13,11 +48,13 @@ galah_raw_dynamics = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits a
 # galah_Gaia_csv = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/Jupyter Notebooks/Gahla_all_GAIA_kinematics.csv'
 
 galah_Gaia_fits_original = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/Galah_all_GAIA_kinematics' # THis is the same as the one directly below but this one does not include gaia ra, dec, pmra, pmdec, parallax, and radial velocity.
-galah_Gaia_fits = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/Gahla_all_GAIA_kinematics_Aug_2_using_previous_data.fits'
+galah_Gaia_fits = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/Gahla_all_GAIA_kinematics_Aug_2_using_previous_data.fits' #this is the main csv file I use. It contains Galah_dr4_allstar and galah_dr4_vac_dynamics_but it also contains informationg from Gaia DR3 and calculated kinematics with MWpotential 2014 using Glapy
 
 # Pradosh_csv = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/Jupyter Notebooks/Pradosh_all_GAIA_kinematics.csv'
 Pradosh_fits = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/Pradosh_all_GAIA_kinematics'
 Pradosh_Revised_fits = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/Pradosh_revision_kinematics.fits'
+
+Apogee_DR19_fits = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/Apogee_with_kinematics_merge.fits' # this one instead uses kinematic values derived from the Gaia DR3 ids 
 
 # ED_2_stream_csv = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/Jupyter Notebooks/ED_2__gaia_kinematics.csv'
 ED_2_stream_fits = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/ED_2__gaia_kinematics'
@@ -114,6 +151,103 @@ def weighted_avg_and_std(values, weights):
     # Fast and numerically precise:
     variance = np.average((values-average)**2, weights=weights)
     return (average, np.sqrt(variance))
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def cumulative_percent(df, col, min_value, max_value, num_bins, X_point = None):
+    """Return cumulative percentage (from min_value up to each bin edge) of non-null values in `col`.
+    Returns an array with length `num_bins+1` corresponding to the bin edges produced by np.linspace.
+    """
+    vals = []
+    data = df[col].dropna()
+    total = int(data.shape[0])
+    edges = np.linspace(min_value, max_value, num_bins + 1)
+    if total == 0:
+        return np.full(num_bins + 1, np.nan), 0, np.nan, edges
+    for edge in edges:
+        # count = ((data >= min_value) & (data <= edge)).sum()
+        count = (data <= edge).sum()
+        vals.append(100.0 * count / total)
+
+    percents = np.array(vals)
+
+    # By default, no interpolated percentile value
+    fifty_point = np.nan
+
+    # If an X_point percentile is requested, compute it directly from the data
+    # rather than depending on the bin edges. This yields a more accurate
+    # estimate of the value at which X_point percent of the sample is below it.
+    if X_point is not None:
+        try:
+            # np.nanpercentile handles NaNs and returns the X_point percentile
+            fifty_point = float(np.nanpercentile(data.values, X_point))
+        except Exception:
+            # Fallback: if percentile computation fails, leave as NaN
+            fifty_point = np.nan
+
+    return percents, total, fifty_point, edges
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def kde_and_percentiles(datasets, ref, elm_ratio, num_bins = 50, percentiles = [16, 50, 84]):
+
+    ref_series = datasets[ref][0][elm_ratio].dropna()
+    if len(ref_series) == 0:
+        raise RuntimeError(f"Reference dataset '{ref}' has no valid '{elm_ratio}' values")
+
+    dif_value = ref_series.max() - ref_series.min()
+    extention = dif_value * 0.02
+    max_value = ref_series.max() + extention
+    min_value = ref_series.min() - extention
+
+    print(ref_series.min())
+    # results container
+    results = {}
+    edges = None
+    for name, (df, color) in datasets.items():
+        # compute cumulative percents (once per dataset)
+        percents, total, _, edges = cumulative_percent(df, elm_ratio, min_value, max_value, num_bins, None)
+
+        # compute percentiles directly from the data (independent of edges)
+        series = df[elm_ratio].dropna()
+        pts = {}
+        if len(series) > 0:
+            for p in percentiles:
+                try:
+                    pts[p] = float(np.nanpercentile(series.values, p))
+                except Exception:
+                    pts[p] = np.nan
+        else:
+            for p in percentiles:
+                pts[p] = np.nan
+
+        results[name] = {
+            'percents': percents,
+            'total': total,
+            'points': pts,
+            'color': color,
+            'series': series
+        }
+
+    # print summaries
+    for name in datasets:
+        mid = results[name]['points'][50]
+        plus = results[name]['points'][84] - mid
+        minus = results[name]['points'][16] - mid
+        print(f"{name}: {mid:.2f}, +{plus:.2f}, {minus:.2f}")
+
+    # Build labeled data dict for plotting (series, color, formatted label)
+    data = {}
+    for name in datasets:
+        mid = results[name]['points'][50]
+        plus = results[name]['points'][84] - mid
+        minus = results[name]['points'][16] - mid
+        label = rf"{name} ${mid:.2f}_{{{minus:.2f}}}^{{+{plus:.2f}}}$"
+        percentiles_label = rf"${mid:.2f}_{{{minus:.2f}}}^{{+{plus:.2f}}}$"
+        data[name] = (results[name]['series'], results[name]['color'], label, percentiles_label)
+
+    # 'edges' and individual 'percents' arrays are available in results[name]['percents']
+    return data, results, edges, min_value, max_value
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
@@ -366,7 +500,7 @@ def fit_gmm_and_get_pdf(data, n_components, n_points=1000):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compents = False, fontsize = 10, shift_right = 0.01, shift_up = 0.99, linewidth_main = 2, linewidth_components = 1.5):
+def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compents = False, fontsize = 10, shift_right = 0.01, shift_up = 0.99, linewidth_main = 2, linewidth_components = 1.5, ax=None):
     # """Plot GMM curve"""
     # x, pdf = fit_gmm_and_get_pdf(data, n_components)
     # plt.plot(x, pdf, lw=2, color=color, label=f"{label}")
@@ -375,8 +509,11 @@ def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compen
 
     x, pdf, gmm = fit_gmm_and_get_pdf(data, n_components)
 
+    # choose axes
+    use_ax = ax if ax is not None else plt.gca()
+
     # Total mixture
-    plt.plot(x, pdf, lw=linewidth_main, color=color, label=label)
+    use_ax.plot(x, pdf, lw=linewidth_main, color=color, label=label)
 
     if maximum_peak:
 
@@ -392,14 +529,13 @@ def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compen
         print("Maximum PDF value:", pdf[max_index])
         max_x = np.round(x[max_index][0], 3)
         if n_components == 1:
-            # plt.text(shift_right, shift_up, f'{max_x:.2f} \u00B1 {stds[0]:.2f}', transform=plt.gca().transAxes, fontsize = fontsize, color=color, ha='left', va='top')
             if color == "#16b823d8":
-                plt.text(max_x + shift_right, pdf[max_index] + 0.1 + shift_up, f'{max_x:.2f} \u00B1 {stds[0]:.2f}', fontsize = fontsize, color='g', ha='left', va='top')
+                use_ax.text(max_x + shift_right, pdf[max_index] + 0.1 + shift_up, f'{max_x:.2f} \u00B1 {stds[0]:.2f}', fontsize = fontsize, color='g', ha='left', va='top')
             else:
-                plt.text(max_x + shift_right, pdf[max_index] + 0.1 + shift_up, f'{max_x:.2f} \u00B1 {stds[0]:.2f}', fontsize = fontsize, color=color, ha='left', va='top')
+                use_ax.text(max_x + shift_right, pdf[max_index] + 0.1 + shift_up, f'{max_x:.2f} \u00B1 {stds[0]:.2f}', fontsize = fontsize, color=color, ha='left', va='top')
 
         else:
-            plt.text(shift_right, shift_up, f' L:{max_x}', transform=plt.gca().transAxes, fontsize = fontsize, color=color, ha='left', va='top')
+            use_ax.text(shift_right, shift_up, f' L:{max_x}', transform=use_ax.transAxes, fontsize = fontsize, color=color, ha='left', va='top')
         return(max_x)
     # Individual components
     components = sorted(
@@ -416,19 +552,19 @@ def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compen
             sigma
         )
         if plot_compents:
-            plt.plot(
-            x.flatten(),
-            component_pdf,
-            color=color,
-            ls='--',
-            lw=linewidth_components,
-            alpha=0.7
+            use_ax.plot(
+                x.flatten(),
+                component_pdf,
+                color=color,
+                ls='--',
+                lw=linewidth_components,
+                alpha=0.7
             )
 
             if maximum_peak == False:
                 print(mean)
                 mean_text = np.round(mean[0], 3)
-                plt.text(shift_right, 0.98 - 0.05*i, f'C: {mean_text}', transform=plt.gca().transAxes, color=color, ha='left', va='top')
+                use_ax.text(shift_right, 0.98 - 0.05*i, f'C: {mean_text}', transform=use_ax.transAxes, color=color, ha='left', va='top')
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
