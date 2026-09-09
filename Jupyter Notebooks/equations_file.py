@@ -4,18 +4,23 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import LogNorm
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
+import matplotlib.patheffects as pe
+
+from adjustText import adjust_text
 import time as tm
 from time import time
 import fitsio
 import pandas as pd
 from galpy.potential import MWPotential2014, vcirc, evaluateRforces
 from galpy.orbit import Orbit
-from scipy.stats import gaussian_kde, ks_2samp, kstest
+from scipy.stats import gaussian_kde, ks_2samp, kstest, norm, chi2
 from hyppo.ksample import Energy, KSample
 from hyppo.independence import Hsic
 import corner
-from scipy.stats import norm
 from sklearn.mixture import GaussianMixture
+from statsmodels.stats.multitest import multipletests
 
 from astroquery.gaia import Gaia
 from astropy.table import Table
@@ -34,13 +39,14 @@ from pathlib import Path
 from functools import reduce
 
 import numpy as np
+import math
 import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.mixture import GaussianMixture
-from scipy.stats import norm, kstest
 from hyppo.ksample import Energy
 from itertools import combinations
 import re
+import ast
+from IPython.display import HTML
 # File-path and dataset variables
 galah_raw_allstar = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/galah_dr4_allstar_240705.fits'
 galah_raw_dynamics = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/galah_dr4_vac_dynamics_240705.fits'
@@ -204,7 +210,7 @@ def kde_and_percentiles(datasets, ref, elm_ratio, num_bins = 50, percentiles = [
     # results container
     results = {}
     edges = None
-    for name, (df, color) in datasets.items():
+    for name, (df, color, ls, ls_2) in datasets.items():
         # compute cumulative percents (once per dataset)
         percents, total, _, edges = cumulative_percent(df, elm_ratio, min_value, max_value, num_bins, None)
 
@@ -226,6 +232,8 @@ def kde_and_percentiles(datasets, ref, elm_ratio, num_bins = 50, percentiles = [
             'total': total,
             'points': pts,
             'color': color,
+            'ls': ls,
+            'ls_2': ls_2,
             'series': series
         }
 
@@ -234,7 +242,7 @@ def kde_and_percentiles(datasets, ref, elm_ratio, num_bins = 50, percentiles = [
         mid = results[name]['points'][50]
         plus = results[name]['points'][84] - mid
         minus = results[name]['points'][16] - mid
-        print(f"{name}: {mid:.2f}, +{plus:.2f}, {minus:.2f}")
+        # print(f"{name}: {mid:.2f}, +{plus:.2f}, {minus:.2f}")
 
     # Build labeled data dict for plotting (series, color, formatted label)
     data = {}
@@ -244,7 +252,7 @@ def kde_and_percentiles(datasets, ref, elm_ratio, num_bins = 50, percentiles = [
         minus = results[name]['points'][16] - mid
         label = rf"{name} ${mid:.2f}_{{{minus:.2f}}}^{{+{plus:.2f}}}$"
         percentiles_label = rf"${mid:.2f}_{{{minus:.2f}}}^{{+{plus:.2f}}}$"
-        data[name] = (results[name]['series'], results[name]['color'], label, percentiles_label)
+        data[name] = (results[name]['series'], results[name]['color'], results[name]['ls'], results[name]['ls_2'], label, percentiles_label)
 
     # 'edges' and individual 'percents' arrays are available in results[name]['percents']
     return data, results, edges, min_value, max_value
@@ -371,10 +379,10 @@ def one_d_ks_test(ratio_list, object_list):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def two_d_ks_test(ratio_list, object_list, FE_H=False):
+def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = False):
     (sample1_name, (df1,)), (sample2_name, (df2,)) = object_list.items()
 
-    ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'p_value', 'statistic', 'num_samples_1', 'num_samples_2'])
+    ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'p_value', 'statistic', f'num in {sample1_name}', f'num in {sample2_name}'])
 
     if FE_H == True:
         if 'fe_h' in ratio_list:
@@ -382,13 +390,16 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False):
     elif FE_H == False:
         ratio_list = [ratio for ratio in ratio_list if ratio != 'fe_h']
 
+    count = 0
+    total_count = len(ratio_list) * (len(ratio_list) - 1) // 2
     for i in range(len(ratio_list)):
         for j in range(i + 1, len(ratio_list)):
             ratio1 = ratio_list[i]
             ratio2 = ratio_list[j]
 
             print("")
-            print(f'{ratio1} and {ratio2}')    
+            count += 1
+            print(f'{count}/{total_count}: {ratio1} and {ratio2}')    
             
             ratio1_tokens = {
                 token
@@ -430,8 +441,17 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False):
                 num_samples_1,
                 num_samples_2
             ]
-
+    
     ratio_ks_test = ratio_ks_test.sort_values(by='p_value', ascending=True)
+
+    ratio_ks_test['element_list'] = (
+        ratio_ks_test['ratio 1'].str.lower().str.split(r'[_/]+', regex=True)
+        + ratio_ks_test['ratio 2'].str.lower().str.split(r'[_/]+', regex=True)
+        )
+    ratio_ks_test['element_list'] = ratio_ks_test['element_list'].apply(sorted)
+    if remove_similar_comb:
+        ratio_ks_test = ratio_ks_test.drop_duplicates(subset='element_list', keep='first')
+    
     return ratio_ks_test
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
@@ -485,6 +505,42 @@ def three_d_ks_test(thee_d_ratio_list, object_list, FE_H = False):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
+def energy_tests_best_elements(df, name, element_list, n=10, percents = False):
+    """
+    returns a table with the number of times an element shows up the top n rows of the two_d_test
+    
+    """
+    expected = n * len(ast.literal_eval(df['element_list'][0])) / len(element_list)
+    print(f'expected: {expected}')
+    xi_sq_contribution = []
+    elm_frequency_table = pd.DataFrame(columns = ['elm', f'{name} frequency'])
+
+    ratio_col = [col.strip() for col in df.columns if 'ratio' in col.strip().lower()]
+    for elm in element_list:
+        count = 0
+        for i in range(n):
+            if elm in ast.literal_eval(df['element_list'].iloc[i]):
+                count += 1
+                # count -= np.log(df['p_value'].iloc[i])
+        if percents:
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': count/n}
+        else:
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': count}
+
+        xi_sq_contribution.append(((count - expected) ** 2) / expected)
+    xi_sq_statistic = sum(xi_sq_contribution)
+    elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': 'xi_sq_statistic', f'{name} frequency': xi_sq_statistic}
+    
+    xi_sq_p_value = chi2.sf(xi_sq_statistic, df=len(element_list) - 1)
+    elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': 'xi_sq_p_value', f'{name} frequency': xi_sq_p_value}
+    
+    elm_frequency_table.sort_values(by = f'{name} frequency', ascending = False, inplace = True)
+    
+  
+    return elm_frequency_table
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
 def fit_gmm_and_get_pdf(data, n_components, n_points=1000):
     """Fit GMM and return x + PDF"""
     data = data.dropna().values.reshape(-1, 1)
@@ -500,7 +556,7 @@ def fit_gmm_and_get_pdf(data, n_components, n_points=1000):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compents = False, fontsize = 10, shift_right = 0.01, shift_up = 0.99, linewidth_main = 2, linewidth_components = 1.5, ax=None):
+def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compents = False, fontsize = 10, shift_right = 0.01, shift_up = 0.99, linewidth_main = 2, linewidth_components = 1.5, ax=None, linestyle = 'solid'):
     # """Plot GMM curve"""
     # x, pdf = fit_gmm_and_get_pdf(data, n_components)
     # plt.plot(x, pdf, lw=2, color=color, label=f"{label}")
@@ -513,7 +569,7 @@ def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compen
     use_ax = ax if ax is not None else plt.gca()
 
     # Total mixture
-    use_ax.plot(x, pdf, lw=linewidth_main, color=color, label=label)
+    use_ax.plot(x, pdf, lw=linewidth_main, color=color, label=label, linestyle = linestyle)
 
     if maximum_peak:
 
@@ -866,12 +922,22 @@ def make_elm_ratio_combinations_galah_only_flag_nessessary_columns( data_set, el
     new_element_ratios_list = []
     new_element_ratio_errors_list = []
     data_set_copy = data_set.copy()
+    # First, apply existing flag columns to the original X_fe columns
+    for elm in element_in_list:
+        col = f"{elm}_fe"
+        flag_col = f"flag_{elm}_fe"
+        err_col = f"e_{col}"
+        if col in data_set_copy.columns and flag_col in data_set_copy.columns:
+            mask = data_set_copy[flag_col] != 0
+            if mask.any():
+                data_set_copy.loc[mask, col] = np.nan
+                if err_col in data_set_copy.columns:
+                    data_set_copy.loc[mask, err_col] = np.nan
 
     for i in range(len(element_in_list)):
         if element_in_list[i] in ['fe']:
             new_element_ratios_list.append('fe_h')
             new_element_ratio_errors_list.append('e_fe_h')
-
 
         for j in range(i+1, len(element_in_list)):
             if element_in_list[j] in ["fe", "h"]:
@@ -905,10 +971,12 @@ def make_elm_ratio_combinations_galah_only_flag_nessessary_columns( data_set, el
                 valid_mask = pd.Series(True, index=data_set_copy.index)
                 if element_in_list[i] != 'fe':
                     x1_flag = 'flag_' + f'{element_in_list[i]}' + '_fe'
-                    valid_mask &= (data_set_copy[x1_flag] == 0)
+                    if x1_flag in data_set_copy.columns:
+                        valid_mask &= (data_set_copy[x1_flag] == 0)
                 if element_in_list[j] != 'fe':
                     x2_flag = 'flag_' + f'{element_in_list[j]}' + '_fe'
-                    valid_mask &= (data_set_copy[x2_flag] == 0)
+                    if x2_flag in data_set_copy.columns:
+                        valid_mask &= (data_set_copy[x2_flag] == 0)
 
                 data_set_copy.loc[:, new_ratio_label] = np.nan
                 data_set_copy.loc[:, new_ratio_error_label] = np.nan
@@ -918,6 +986,5 @@ def make_elm_ratio_combinations_galah_only_flag_nessessary_columns( data_set, el
                 data_set_copy.loc[valid_mask, new_ratio_error_label] = np.sqrt(
                     (data_set_copy.loc[valid_mask, err_col_numerator])**2 + (data_set_copy.loc[valid_mask, err_col_denominator])**2
                 )
-
     return data_set_copy, new_element_ratios_list, new_element_ratio_errors_list,
 
