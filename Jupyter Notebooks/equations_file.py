@@ -16,6 +16,7 @@ import pandas as pd
 from galpy.potential import MWPotential2014, vcirc, evaluateRforces
 from galpy.orbit import Orbit
 from scipy.stats import gaussian_kde, ks_2samp, kstest, norm, chi2
+from scipy.interpolate import UnivariateSpline
 from hyppo.ksample import Energy, KSample
 from hyppo.independence import Hsic
 import corner
@@ -47,6 +48,8 @@ from itertools import combinations
 import re
 import ast
 from IPython.display import HTML
+from statsmodels.nonparametric.smoothers_lowess import lowess
+
 # File-path and dataset variables
 galah_raw_allstar = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/galah_dr4_allstar_240705.fits'
 galah_raw_dynamics = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/galah_dr4_vac_dynamics_240705.fits'
@@ -70,7 +73,7 @@ Vmans_NGC5139_txt = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits an
 Vmans_NGC1851_txt = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/clusters/catalogues/NGC_1851.txt'
 Vmans_NGC0104_txt = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/clusters/catalogues/NGC_104_47Tuc.txt'
 
-
+letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 def ensure_native_endian(df):
     """Convert all numeric NumPy columns in a DataFrame to native byte order."""
@@ -206,7 +209,7 @@ def kde_and_percentiles(datasets, ref, elm_ratio, num_bins = 50, percentiles = [
     max_value = ref_series.max() + extention
     min_value = ref_series.min() - extention
 
-    print(ref_series.min())
+    # print(ref_series.min())
     # results container
     results = {}
     edges = None
@@ -541,6 +544,15 @@ def energy_tests_best_elements(df, name, element_list, n=10, percents = False):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
+def ratio_label(ratio):
+    """Convert e.g. 'mn_na' -> '[Mn/Na]'."""
+    return '[' + '/'.join(
+        part.capitalize()
+        for part in ratio.split('_')
+    ) + ']'
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
 def fit_gmm_and_get_pdf(data, n_components, n_points=1000):
     """Fit GMM and return x + PDF"""
     data = data.dropna().values.reshape(-1, 1)
@@ -628,6 +640,270 @@ def plot_gmm(data, label, color, n_components, maximum_peak = False, plot_compen
 def plot_hist(data, label, color, alpha):
     """Plot histogram"""
     plt.hist(data, bins=30, density=True, alpha=alpha, color=color, label=label)
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def running_mean(df, x_col, y_col, bin_percent):
+    
+    mean_list = pd.DataFrame(columns=['x_val', 'mean'])
+    
+    # Get x and y columns
+    dfx = df[x_col]
+    dfy = df[y_col]
+
+    # Remove NaNs
+    mask_fit = dfx.notna() & dfy.notna()
+    x_fit_data = dfx[mask_fit]
+    y_fit_data = dfy[mask_fit]
+    
+    # Find x range
+    x_max = np.max(x_fit_data)
+    x_min = np.min(x_fit_data)
+    x_range = x_max - x_min
+    
+    # Calculate bin size
+    bin_size = x_range * bin_percent
+    
+    # Create bins
+    bins = np.arange(x_min, x_max + bin_size , bin_size)
+    # Make sure x_max is included as the final edge
+    # bins = np.append(bins, x_max)
+    
+    # Calculate mean in each bin
+    for i in range(len(bins) - 1):
+        
+        bin_min = bins[i]
+        bin_max = bins[i + 1]
+        
+        bin_center = (bin_min + bin_max) / 2.0
+        
+        # Find data points inside bin
+        x_in_bin = (x_fit_data >= bin_min) & (x_fit_data < bin_max)
+
+        # else:# Calculate mean y
+        y_mean = np.mean(y_fit_data[x_in_bin])
+        
+        # Add to dataframe
+        mean_list.loc[len(mean_list)] = [bin_center, y_mean]
+    
+    return mean_list.sort_values(by='x_val')
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def poly_fit(df, x_col, y_col, degree, cut_off = 0.05):
+    # Get valid x/y values
+    # table = pd.DataFrame(columns=[f'{x_col}_fit', f'{y_col}_fit'])
+    
+    mask = df[x_col].notna() & df[y_col].notna()
+
+    x = df.loc[mask, x_col].values
+    y = df.loc[mask, y_col].values
+
+    # Polynomial fit
+    coefficients = np.polyfit(x, y, degree)
+    poly = np.poly1d(coefficients)
+
+    # Smooth x values for plotting
+    x_fit = np.linspace(x.min(), x.max(), 500)
+    y_fit = poly(x_fit)
+    
+    # table[f'{x_col}_fit', f'{y_col}_fit'] = [x_fit, y_fit]
+    
+    low_cut, high_cut = np.percentile(
+        x,
+        [cut_off * 100, (1 - cut_off) * 100]
+    )
+    
+    mask_cut = (x_fit >= low_cut) & (x_fit <= high_cut)
+
+    x_fit = x_fit[mask_cut]
+    y_fit = y_fit[mask_cut] 
+
+    
+    return x_fit, y_fit
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def lowess_fit(df, x_col, y_col, frac=0.3, cut_off=0.05):
+    # Get valid x/y values
+    mask = df[x_col].notna() & df[y_col].notna()
+
+    x = df.loc[mask, x_col].to_numpy()
+    y = df.loc[mask, y_col].to_numpy()
+
+    # Sort by x
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    # LOWESS fit
+    smoothed = lowess(
+        y,
+        x,
+        frac=frac,
+        return_sorted=True
+    )
+
+    x_fit = smoothed[:, 0]
+    y_fit = smoothed[:, 1]
+
+    # Cut off ends of x range
+    low_cut, high_cut = np.percentile(
+        x,
+        [cut_off * 100, (1 - cut_off) * 100]
+    )
+
+    mask_cut = (
+        (x_fit >= low_cut) &
+        (x_fit <= high_cut)
+    )
+
+    x_fit = x_fit[mask_cut]
+    y_fit = y_fit[mask_cut]
+
+    return x_fit, y_fit
+
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def median_spline_fit(df, x_col, y_col, n_bins=20, smooth=0.5, cut_off=0.05):
+
+    # Remove NaNs
+    mask = df[x_col].notna() & df[y_col].notna()
+
+    x = df.loc[mask, x_col].to_numpy()
+    y = df.loc[mask, y_col].to_numpy()
+    
+    if len(x) < 2:
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([])
+        )
+
+    # Sort by x
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    # ---------------------------------------------------------
+    # Bin the data
+    # ---------------------------------------------------------
+
+    bins = np.linspace(x.min(), x.max(), n_bins + 1)
+
+    x_median = []
+    y_median = []
+    y_low = []
+    y_high = []
+
+    for i in range(n_bins):
+
+        mask_bin = (x >= bins[i]) & (x < bins[i + 1])
+
+        if mask_bin.sum() < 2:
+            continue
+
+        x_bin = x[mask_bin]
+        y_bin = y[mask_bin]
+
+        x_median.append(np.median(x_bin))
+        y_median.append(np.median(y_bin))
+
+        # 16th and 84th percentiles
+        y_low.append(np.percentile(y_bin, 16))
+        y_high.append(np.percentile(y_bin, 84))
+
+    x_median = np.asarray(x_median)
+    y_median = np.asarray(y_median)
+    y_low = np.asarray(y_low)
+    y_high = np.asarray(y_high)
+
+    # ---------------------------------------------------------
+    # Check how many populated bins we have
+    # ---------------------------------------------------------
+
+    n_points = len(x_median)
+
+    if n_points < 2:
+        print(
+            f"{name}: Skipping spline for {x_col} vs {y_col}: "
+            f"only {n_points} populated bins."
+        )
+
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([])
+        )
+        
+    
+    # ---------------------------------------------------------
+    # Choose spline degree based on number of points
+    # ---------------------------------------------------------
+
+    # Cubic spline requires m > k
+    # Therefore:
+    #   2 points -> k=1 (linear)
+    #   3 points -> k=2 (quadratic)
+    #   4+ points -> k=3 (cubic)
+
+    k = min(3, n_points - 1)
+    # ---------------------------------------------------------
+    # Smooth spline through the median values
+    # ---------------------------------------------------------
+
+    spline = UnivariateSpline(
+        x_median,
+        y_median,
+        k=k,
+        s=smooth
+    )
+
+    # Smooth x values
+    x_fit = np.linspace(x.min(), x.max(), 500)
+
+    y_fit = spline(x_fit)
+
+    # Also spline the percentile boundaries
+    spline_low = UnivariateSpline(
+        x_median,
+        y_low,
+        k=k,
+        s=smooth
+    )
+
+    spline_high = UnivariateSpline(
+        x_median,
+        y_high,
+        k=k,
+        s=smooth
+    )
+
+    y_low_fit = spline_low(x_fit)
+    y_high_fit = spline_high(x_fit)
+
+    # ---------------------------------------------------------
+    # Cut off ends
+    # ---------------------------------------------------------
+
+    low_cut, high_cut = np.percentile(
+        x,
+        [cut_off * 100, (1 - cut_off) * 100]
+    )
+
+    mask_cut = (
+        (x_fit >= low_cut) &
+        (x_fit <= high_cut)
+    )
+
+    x_fit = x_fit[mask_cut]
+    y_fit = y_fit[mask_cut]
+    y_low_fit = y_low_fit[mask_cut]
+    y_high_fit = y_high_fit[mask_cut]
+
+    return (x_fit, y_fit, y_low_fit, y_high_fit)
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
