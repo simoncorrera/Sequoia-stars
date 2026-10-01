@@ -3,9 +3,10 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, LinearSegmentedColormap
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
+
 import matplotlib.patheffects as pe
 
 from adjustText import adjust_text
@@ -827,7 +828,7 @@ def median_spline_fit(df, x_col, y_col, n_bins=20, smooth=0.5, cut_off=0.05):
 
     if n_points < 2:
         print(
-            f"{name}: Skipping spline for {x_col} vs {y_col}: "
+            f"Skipping spline for {x_col} vs {y_col}: "
             f"only {n_points} populated bins."
         )
 
