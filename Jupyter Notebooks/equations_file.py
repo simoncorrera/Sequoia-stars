@@ -30,7 +30,7 @@ from astropy.table import Table, vstack
 from glob import glob
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import KernelDensity
@@ -50,6 +50,7 @@ import re
 import ast
 from IPython.display import HTML
 from statsmodels.nonparametric.smoothers_lowess import lowess
+import time
 
 # File-path and dataset variables
 galah_raw_allstar = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/galah_dr4_allstar_240705.fits'
@@ -75,6 +76,34 @@ Vmans_NGC1851_txt = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits an
 Vmans_NGC0104_txt = '/Users/simoncorrera/Desktop/MQ NGC3201 project copy/fits and csv files/clusters/catalogues/NGC_104_47Tuc.txt'
 
 letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+galah_Gaia_else_C = "#363535"
+All_C = "#363535"
+Sequoia_C = "#ee7f1e"
+Sequoia_C_2 = "#e018ff"
+GSE_C = "#16b823d8"
+Halo_C = "#0e35e2"
+thamnos_1_C = "#96bd0b"
+thamnos_2_C = "#47F1C4"
+
+galah_Gaia_else_shape = "o"
+All_shape = "o"
+Sequoia_shape = 'D'
+Sequoia_shape_2 = '*'
+GSE_shape = "s"
+Halo_shape = 'o'
+thamnos_1_shape = "P"
+thamnos_2_shape = "X"
+
+galah_Gaia_else_cmap = 'Greys'
+All_cmap = 'rainbow'
+Sequoia_cmap = 'Reds'
+Sequoia_cmap_2 = 'Reds'
+GSE_cmap = 'Greens'
+Halo_cmap = LinearSegmentedColormap.from_list('dark_blues',plt.cm.Blues([0.3, 0.5, 0.7, 0.9, 1.0]))
+thamnos_1_cmap = 'plasma'
+thamnos_2_cmap = 'plasma'
+
 
 def ensure_native_endian(df):
     """Convert all numeric NumPy columns in a DataFrame to native byte order."""
@@ -162,6 +191,14 @@ def weighted_avg_and_std(values, weights):
     variance = np.average((values-average)**2, weights=weights)
     return (average, np.sqrt(variance))
 
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+
+def get_pair(object_list, name1, name2):
+    return {
+        name1: object_list[name1],
+        name2: object_list[name2]
+    }
+    
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
 def cumulative_percent(df, col, min_value, max_value, num_bins, X_point = None):
@@ -297,8 +334,8 @@ def min_corner_plot_lables_comparison(df, number, acc_l, acc_r = False):
                 e_labels.append('e_' + df[ratio].iloc[i])
             labels_list.append(labels)
             e_labels_list.append(e_labels)
-            accuracy_1.append(df[acc_r].iloc[i])
-            accuracy_2.append(df[acc_l].iloc[i])
+            accuracy_1.append(df[acc_l].iloc[i])
+            accuracy_2.append(df[acc_r].iloc[i])
 
         return(labels_list, e_labels_list, accuracy_1, accuracy_2)
 
@@ -393,9 +430,12 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = Fal
             print('fe_h will be included')
     elif FE_H == False:
         ratio_list = [ratio for ratio in ratio_list if ratio != 'fe_h']
+        print('fe_h will not be included')
 
     count = 0
     total_count = len(ratio_list) * (len(ratio_list) - 1) // 2
+    start_time = time.time()
+    print('start: ',start_time)
     for i in range(len(ratio_list)):
         for j in range(i + 1, len(ratio_list)):
             ratio1 = ratio_list[i]
@@ -403,7 +443,9 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = Fal
 
             print("")
             count += 1
-            print(f'{count}/{total_count}: {ratio1} and {ratio2}')    
+            current_time = time.time()
+            elapsed_time = current_time - start_time
+            print(f'{sample1_name} and {sample2_name}: {elapsed_time:.2f}s -- {count}/{total_count}: {ratio1} and {ratio2}')    
             
             ratio1_tokens = {
                 token
@@ -416,8 +458,8 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = Fal
                 if token and re.fullmatch(r'[a-z]+', token)
             }
             
-            print(f'ratio1_tokens: {ratio1_tokens}')
-            print(f'ratio2_tokens: {ratio2_tokens}')
+            # print(f'ratio1_tokens: {ratio1_tokens}')
+            # print(f'ratio2_tokens: {ratio2_tokens}')
 
             shared_segments = sorted(ratio1_tokens & ratio2_tokens)
             if shared_segments:
@@ -460,52 +502,144 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = Fal
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def three_d_ks_test(thee_d_ratio_list, object_list, FE_H = False):
+def three_d_ks_test(ratio_list, object_list, FE_H = False, remove_similar_comb = False):
     (sample1_name, (df1,)), (sample2_name, (df2,)) = object_list.items()
+    
+    ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'ratio 3', 'p_value', 'statistic', f'num in {sample1_name}', f'num in {sample2_name}'])
 
-    ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'ratio 3', 'p_value', 'statistic', 'num_samples_1', 'num_samples_2'])
+    if FE_H == True:
+        if 'fe_h' in ratio_list:
+            print('fe_h will be included')
+    elif FE_H == False:
+        ratio_list = [ratio for ratio in ratio_list if ratio != 'fe_h']
+        print('fe_h will not be included')
+
+    count = 0
+    total_count = len(ratio_list) * (len(ratio_list) - 1) * (len(ratio_list) - 2) // 6
+    start_time = time.time()
+    print('start: ',start_time)
+    for i in range(len(ratio_list)):
+        for j in range(i + 1, len(ratio_list)):
+            for k in range(j + 1, len(ratio_list)):
+                ratio3 = ratio_list[k]
+                ratio1 = ratio_list[i]
+                ratio2 = ratio_list[j]
+
+                print("")
+                count += 1
+                current_time = time.time()
+                elapsed_time = current_time - start_time
+                print(f'{sample1_name} and {sample2_name}: {elapsed_time:.2f}s -- {count}/{total_count}: {ratio1}, {ratio2} and {ratio3}')    
+                
+                ratio1_tokens = {
+                    token
+                    for token in re.split(r'[_/]+', str(ratio1).lower())
+                    if token and re.fullmatch(r'[a-z]+', token)
+                }
+                ratio2_tokens = {
+                    token
+                    for token in re.split(r'[_/]+', str(ratio2).lower())
+                    if token and re.fullmatch(r'[a-z]+', token)
+                }
+                ratio3_tokens = {
+                    token
+                    for token in re.split(r'[_/]+', str(ratio3).lower())
+                    if token and re.fullmatch(r'[a-z]+', token)
+                }
+
+                # print(f'ratio1_tokens: {ratio1_tokens}')
+                # print(f'ratio2_tokens: {ratio2_tokens}')
+                # print(f'ratio3_tokens: {ratio3_tokens}')
+
+                token_sets = [ratio1_tokens, ratio2_tokens, ratio3_tokens]
+                shared_segments = sorted(token for token in set.union(*token_sets) if sum(token in tokens for tokens in token_sets) > 1)
+                if shared_segments:
+                    print(f"Skipping {ratio1}, {ratio2}, {ratio3}: shared elements = {shared_segments}")
+                    continue
+
+                sample1 = df1[[ratio1, ratio2, ratio3]].dropna()
+                sample2 = df2[[ratio1, ratio2, ratio3]].dropna()
+                if len(sample1) <= 3 or len(sample2) <= 3:
+                    continue
+
+                num_samples_1 = len(sample1)
+                num_samples_2 = len(sample2)
+
+                X = sample1.to_numpy()
+                Y = sample2.to_numpy()
+
+                statistic, p_value = Energy().test(X, Y)
+
+                ratio_ks_test.loc[len(ratio_ks_test)] = [
+                    ratio1,
+                    ratio2,
+                    ratio3,
+                    p_value,
+                    abs(statistic),
+                    num_samples_1,
+                    num_samples_2
+                ]
+        
+    ratio_ks_test = ratio_ks_test.sort_values(by='p_value', ascending=True)
+
+    ratio_ks_test['element_list'] = (
+        ratio_ks_test['ratio 1'].str.lower().str.split(r'[_/]+', regex=True)
+        + ratio_ks_test['ratio 2'].str.lower().str.split(r'[_/]+', regex=True)
+        + ratio_ks_test['ratio 3'].str.lower().str.split(r'[_/]+', regex=True)
+        )
+    ratio_ks_test['element_list'] = ratio_ks_test['element_list'].apply(sorted)
+    if remove_similar_comb:
+        ratio_ks_test = ratio_ks_test.drop_duplicates(subset='element_list', keep='first')
+        
+    return ratio_ks_test
+    
+    ######## def three_d_ks_test(thee_d_ratio_list, object_list, FE_H = False):
+
+    # (sample1_name, (df1,)), (sample2_name, (df2,)) = object_list.items()
+
+    # ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'ratio 3', 'p_value', 'statistic', 'num_samples_1', 'num_samples_2'])
 
     # if FE_H == True:
     #     if 'fe_h' in ratio_list:
     #         print('fe_h will be included')
     # elif FE_H == False:
     #     ratio_list = [ratio for ratio in ratio_list if ratio != 'fe_h']
-    for i in range(len(thee_d_ratio_list)):
+    # for i in range(len(thee_d_ratio_list)):
 
-        print(f'{thee_d_ratio_list[i]}')
+    #     print(f'{thee_d_ratio_list[i]}')
 
-        # for key, (df) in object_list.items():
-        ratio1 = thee_d_ratio_list[i][0]
-        ratio2 = thee_d_ratio_list[i][1]
-        ratio3 = thee_d_ratio_list[i][2]
-            # example datasets
-        # keep paired finite values
-        sample1 = df1[[ratio1, ratio2, ratio3]].dropna()
-        sample2 = df2[[ratio1, ratio2, ratio3]].dropna()
-        num_samples_1 = len(sample1)
-        num_samples_2 = len(sample2)
+    #     # for key, (df) in object_list.items():
+    #     ratio1 = thee_d_ratio_list[i][0]
+    #     ratio2 = thee_d_ratio_list[i][1]
+    #     ratio3 = thee_d_ratio_list[i][2]
+    #         # example datasets
+    #     # keep paired finite values
+    #     sample1 = df1[[ratio1, ratio2, ratio3]].dropna()
+    #     sample2 = df2[[ratio1, ratio2, ratio3]].dropna()
+    #     num_samples_1 = len(sample1)
+    #     num_samples_2 = len(sample2)
         
-        # convert to numpy arrays
-        X = sample1.to_numpy()
-        Y = sample2.to_numpy()
+    #     # convert to numpy arrays
+    #     X = sample1.to_numpy()
+    #     Y = sample2.to_numpy()
 
-        # multivariate comparison
-        statistic, p_value = Energy().test(X, Y)
+    #     # multivariate comparison
+    #     statistic, p_value = Energy().test(X, Y)
 
-        ratio_ks_test.loc[len(ratio_ks_test)] = [
-            ratio1,
-            ratio2,
-            ratio3,
-            p_value,
-            abs(statistic),
-            num_samples_1,
-            num_samples_2
-        ]
-    ratio_ks_test = ratio_ks_test.sort_values(
-        by='p_value',
-        ascending=True
-        )
-    return ratio_ks_test
+    #     ratio_ks_test.loc[len(ratio_ks_test)] = [
+    #         ratio1,
+    #         ratio2,
+    #         ratio3,
+    #         p_value,
+    #         abs(statistic),
+    #         num_samples_1,
+    #         num_samples_2
+    #     ]
+    # ratio_ks_test = ratio_ks_test.sort_values(
+    #     by='p_value',
+    #     ascending=True
+    #     )
+    # return ratio_ks_test
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
@@ -527,7 +661,7 @@ def energy_tests_best_elements(df, name, element_list, n=10, percents = False):
                 count += 1
                 # count -= np.log(df['p_value'].iloc[i])
         if percents:
-            elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': count/n}
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency':100*count/n}
         else:
             elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': count}
 
