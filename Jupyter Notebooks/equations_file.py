@@ -193,11 +193,8 @@ def weighted_avg_and_std(values, weights):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def get_pair(object_list, name1, name2):
-    return {
-        name1: object_list[name1],
-        name2: object_list[name2]
-    }
+def get_pair(object_list, *names):
+    return {name: object_list[name] for name in names}
     
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
@@ -420,17 +417,14 @@ def one_d_ks_test(ratio_list, object_list):
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = False):
+def two_d_ks_test(ratio_list, object_list, banned_ratios = None, remove_similar_comb = False):
     (sample1_name, (df1,)), (sample2_name, (df2,)) = object_list.items()
 
     ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'p_value', 'statistic', f'num in {sample1_name}', f'num in {sample2_name}'])
 
-    if FE_H == True:
-        if 'fe_h' in ratio_list:
-            print('fe_h will be included')
-    elif FE_H == False:
-        ratio_list = [ratio for ratio in ratio_list if ratio != 'fe_h']
-        print('fe_h will not be included')
+    if banned_ratios:
+            ratio_list = [ratio for ratio in ratio_list if ratio not in banned_ratios]
+            print(f'{banned_ratios} will not be included')
 
     count = 0
     total_count = len(ratio_list) * (len(ratio_list) - 1) // 2
@@ -502,18 +496,15 @@ def two_d_ks_test(ratio_list, object_list, FE_H=False, remove_similar_comb = Fal
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def three_d_ks_test(ratio_list, object_list, FE_H = False, remove_similar_comb = False):
+def three_d_ks_test(ratio_list, object_list, banned_ratios = None, remove_similar_comb = False):
     (sample1_name, (df1,)), (sample2_name, (df2,)) = object_list.items()
     
     ratio_ks_test = pd.DataFrame(columns=['ratio 1', 'ratio 2', 'ratio 3', 'p_value', 'statistic', f'num in {sample1_name}', f'num in {sample2_name}'])
 
-    if FE_H == True:
-        if 'fe_h' in ratio_list:
-            print('fe_h will be included')
-    elif FE_H == False:
-        ratio_list = [ratio for ratio in ratio_list if ratio != 'fe_h']
-        print('fe_h will not be included')
-
+    if banned_ratios:
+            ratio_list = [ratio for ratio in ratio_list if ratio not in banned_ratios]
+            print(f'{banned_ratios} will not be included')
+        
     count = 0
     total_count = len(ratio_list) * (len(ratio_list) - 1) * (len(ratio_list) - 2) // 6
     start_time = time.time()
@@ -642,14 +633,26 @@ def three_d_ks_test(ratio_list, object_list, FE_H = False, remove_similar_comb =
     # return ratio_ks_test
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
+def parse_element_list(value):
+    if isinstance(value, str):
+        return ast.literal_eval(value)
+    elif isinstance(value, list):
+        return value
+    else:
+        raise TypeError(
+            f"Expected a list or string representation of a list, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+"""----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def energy_tests_best_elements(df, name, element_list, n=10, percents = False):
+def energy_tests_best_elements(df, name, element_list, n=10, percents = False, bibtext_format = False): # dataframe, name of the dataframe, list of elements, number of top rows to consider, whether to return percents or counts
     """
     returns a table with the number of times an element shows up the top n rows of the two_d_test
     
     """
-    expected = n * len(ast.literal_eval(df['element_list'][0])) / len(element_list)
-    print(f'expected: {expected}')
+    elements = parse_element_list(df['element_list'].iloc[0])
+    expected = n * len(elements) / len(element_list)
+    print(f'expected: {expected} / {n} * {len(elements)} / {len(element_list)} or {100*expected/n:.2f}% of the time')
     xi_sq_contribution = []
     elm_frequency_table = pd.DataFrame(columns = ['elm', f'{name} frequency'])
 
@@ -657,11 +660,15 @@ def energy_tests_best_elements(df, name, element_list, n=10, percents = False):
     for elm in element_list:
         count = 0
         for i in range(n):
-            if elm in ast.literal_eval(df['element_list'].iloc[i]):
+            if elm in parse_element_list(df['element_list'].iloc[i]):
                 count += 1
                 # count -= np.log(df['p_value'].iloc[i])
         if percents:
-            elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency':100*count/n}
+            if bibtext_format:
+                elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': f' & {100*count/n:.1f}\%'}
+            else:
+                elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency':100*count/n}
+
         else:
             elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': count}
 
@@ -672,7 +679,8 @@ def energy_tests_best_elements(df, name, element_list, n=10, percents = False):
     xi_sq_p_value = chi2.sf(xi_sq_statistic, df=len(element_list) - 1)
     elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': 'xi_sq_p_value', f'{name} frequency': xi_sq_p_value}
     
-    elm_frequency_table.sort_values(by = f'{name} frequency', ascending = False, inplace = True)
+    if bibtext_format == False:
+        elm_frequency_table.sort_values(by = f'{name} frequency', ascending = False, inplace = True)
     
   
     return elm_frequency_table
