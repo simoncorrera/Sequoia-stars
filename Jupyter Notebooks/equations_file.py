@@ -3,9 +3,10 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib.colors import LogNorm, LinearSegmentedColormap
+from matplotlib.colors import LogNorm, LinearSegmentedColormap, TwoSlopeNorm
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
+import matplotlib.patches as patches
 
 import matplotlib.patheffects as pe
 
@@ -645,45 +646,56 @@ def parse_element_list(value):
         )
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
-def energy_tests_best_elements(df, name, element_list, n=10, percents = False, bibtext_format = False): # dataframe, name of the dataframe, list of elements, number of top rows to consider, whether to return percents or counts
+def energy_tests_best_elements(df, name, element_list, n, format): # dataframe, name of the dataframe, list of elements, number of top rows to consider, whether to return percents or counts
     """
     returns a table with the number of times an element shows up the top n rows of the two_d_test
+    format can be 'percent', 'count', 'bibtext_percent', 'bibtext_count', or 'heat_map'
     
     """
     elements = parse_element_list(df['element_list'].iloc[0])
     expected = n * len(elements) / len(element_list)
     print(f'expected: {expected} / {n} * {len(elements)} / {len(element_list)} or {100*expected/n:.2f}% of the time')
     xi_sq_contribution = []
-    elm_frequency_table = pd.DataFrame(columns = ['elm', f'{name} frequency'])
+    elm_frequency_table = pd.DataFrame(columns = ['Element', f'{name}'])
 
     ratio_col = [col.strip() for col in df.columns if 'ratio' in col.strip().lower()]
+    element_label_list = []
     for elm in element_list:
         count = 0
         for i in range(n):
             if elm in parse_element_list(df['element_list'].iloc[i]):
                 count += 1
                 # count -= np.log(df['p_value'].iloc[i])
-        if percents:
-            if bibtext_format:
-                elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': f' & {100*count/n:.1f}\%'}
-            else:
-                elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency':100*count/n}
+        elm_label = elm.capitalize()
+        element_label_list.append(elm_label)
+        if format == 'percent':
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': elm_label, f'{name}':100*count/n}
+        elif format == 'count':
+                        elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': elm_label, f'{name}': count}
+        elif format == 'bibtext_percent':
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': elm_label, f'{name}': f' & {100*count/n:.1f}\%'}
+        elif format == 'bibtext_count':
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': elm_label, f'{name}': f' & {count}'}
+        elif format == 'heat_map_count':
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': elm_label, f'{name}':count}
+        elif format == 'heat_map_percent':
+            elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': elm_label, f'{name}':count/n}
 
-        else:
-            elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': elm, f'{name} frequency': count}
 
+        # if format != 'heat_map_count' and format != 'heat_map_percent':
         xi_sq_contribution.append(((count - expected) ** 2) / expected)
+    # if format != 'heat_map_count' and format != 'heat_map_percent':
     xi_sq_statistic = sum(xi_sq_contribution)
-    elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': 'xi_sq_statistic', f'{name} frequency': xi_sq_statistic}
-    
+    elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': 'xi_sq_statistic', f'{name}' : xi_sq_statistic}
+
     xi_sq_p_value = chi2.sf(xi_sq_statistic, df=len(element_list) - 1)
-    elm_frequency_table.loc[len(elm_frequency_table)] = {'elm': 'xi_sq_p_value', f'{name} frequency': xi_sq_p_value}
+    elm_frequency_table.loc[len(elm_frequency_table)] = {'Element': 'xi_sq_p_value', f'{name}': xi_sq_p_value}
+
+    # if format == 'count' or format == 'percent':
+    #     elm_frequency_table.sort_values(by = f'{name} frequency', ascending = False, inplace = True)    
     
-    if bibtext_format == False:
-        elm_frequency_table.sort_values(by = f'{name} frequency', ascending = False, inplace = True)
-    
-  
-    return elm_frequency_table
+    return elm_frequency_table, element_label_list
+
 
 """----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"""
 
